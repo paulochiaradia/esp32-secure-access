@@ -1,0 +1,12 @@
+# PlatformIO
+.pio/
+.vscode/
+*.orig
+
+# Go
+backend/bin/
+backend/.env
+
+# OS
+.DS_Store
+Thumbs.db
