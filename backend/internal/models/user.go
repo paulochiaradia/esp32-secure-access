@@ -1,6 +1,10 @@
 package models
 
-import "gorm.io/gorm"
+import (
+	"time"
+
+	"gorm.io/gorm"
+)
 
 // Tabela de usuários autorizados
 type User struct {
@@ -16,4 +20,12 @@ type AccessLog struct {
 	UID     string
 	Status  string // "authorized" ou "denied"
 	Message string
+}
+
+// Tabela de nonces utilizados para proteger contra replay attack.
+type UsedNonce struct {
+	gorm.Model
+	UID       string    `gorm:"index:idx_uid_nonce,unique"`
+	Nonce     string    `gorm:"index:idx_uid_nonce,unique"`
+	ExpiresAt time.Time `gorm:"index"`
 }

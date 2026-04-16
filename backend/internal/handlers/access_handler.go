@@ -23,27 +23,31 @@ func (h *AccessHandler) HandleAccessRequest(c *gin.Context) {
 	var req models.AccessRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		log.Printf("Erro de parse: %v", err)
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Payload inválido"})
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Status: "error", Message: "Payload inválido"})
 		return
 	}
 
 	result, err := h.Service.ProcessAccessRequest(req)
 	if err != nil {
 		switch {
+		case errors.Is(err, services.ErrInvalidTimestamp):
+			c.JSON(http.StatusUnauthorized, models.AccessResponse{Status: "denied", Message: "Requisição fora da janela de tempo"})
 		case errors.Is(err, services.ErrInvalidSignature):
 			log.Printf("TENTATIVA DE INVASÃO: UID %s enviou assinatura inválida", req.UID)
-			c.JSON(http.StatusUnauthorized, gin.H{"status": "denied", "message": "Falha na segurança"})
+			c.JSON(http.StatusUnauthorized, models.AccessResponse{Status: "denied", Message: "Falha na segurança"})
+		case errors.Is(err, services.ErrReplayDetected):
+			c.JSON(http.StatusUnauthorized, models.AccessResponse{Status: "denied", Message: "Replay detectado"})
 		case errors.Is(err, services.ErrUserNotFound):
-			c.JSON(http.StatusForbidden, gin.H{"status": "denied", "message": "Acesso não autorizado"})
+			c.JSON(http.StatusForbidden, models.AccessResponse{Status: "denied", Message: "Acesso não autorizado"})
 		default:
-			c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Erro interno"})
+			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Status: "error", Message: "Erro interno"})
 		}
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"status":  "authorized",
-		"message": "Bem-vindo, " + result.UserName,
-		"user":    result.UserName,
+	c.JSON(http.StatusOK, models.AccessResponse{
+		Status:  "authorized",
+		Message: "Bem-vindo, " + result.UserName,
+		User:    result.UserName,
 	})
 }

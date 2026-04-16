@@ -12,3 +12,13 @@ type AccessResponse struct {
 	Message string `json:"message"`
 	User    string `json:"user,omitempty"`
 }
+
+type ErrorResponse struct {
+	Status  string `json:"status"`
+	Message string `json:"message"`
+}
+
+type HealthResponse struct {
+	Status   string `json:"status"`
+	Database string `json:"database"`
+}

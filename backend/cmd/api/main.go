@@ -1,6 +1,9 @@
 package main
 
 import (
+	"log"
+	"time"
+
 	"github.com/gin-gonic/gin"
 	"github.com/paulochiaradia/esp32-secure-access/internal/config"
 	"github.com/paulochiaradia/esp32-secure-access/internal/database"
@@ -10,12 +13,29 @@ import (
 )
 
 func main() {
-	cfg := config.GetConfig()
-	db := database.Init(cfg.DBPath)
-	accessRepository := repositories.NewAccessRepository(db)
-	accessService := services.NewAccessService(cfg.SecretKey, accessRepository)
+	cfg, err := config.GetConfig()
+	if err != nil {
+		log.Fatalf("falha de configuração: %v", err)
+	}
+
+	db, err := database.Init(cfg.DBPath)
+	if err != nil {
+		log.Fatalf("falha ao inicializar banco: %v", err)
+	}
+
+	userRepository := repositories.NewUserRepository(db)
+	accessLogRepository := repositories.NewAccessLogRepository(db)
+	nonceRepository := repositories.NewNonceRepository(db)
+	accessService := services.NewAccessService(
+		cfg.SecretKey,
+		userRepository,
+		accessLogRepository,
+		nonceRepository,
+		time.Duration(cfg.AllowedClockSkewSeconds)*time.Second,
+		time.Duration(cfg.NonceTTLSeconds)*time.Second,
+	)
 	accessHandler := handlers.NewAccessHandler(accessService)
-	healthHandler := handlers.NewHealthHandler()
+	healthHandler := handlers.NewHealthHandler(db)
 
 	r := gin.Default()
 	r.GET("/health", healthHandler.HandleHealthCheck)
@@ -24,5 +44,7 @@ func main() {
 		v1.POST("/access", accessHandler.HandleAccessRequest)
 	}
 
-	r.Run(":" + cfg.Port)
+	if err := r.Run(":" + cfg.Port); err != nil {
+		log.Fatalf("falha ao subir servidor: %v", err)
+	}
 }

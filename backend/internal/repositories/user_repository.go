@@ -9,20 +9,19 @@ import (
 
 var ErrUserNotFound = errors.New("user not found")
 
-type AccessRepository interface {
+type UserRepository interface {
 	FindActiveUserByUID(uid string) (*models.User, error)
-	CreateAccessLog(accessLog *models.AccessLog) error
 }
 
-type GormAccessRepository struct {
+type GormUserRepository struct {
 	DB *gorm.DB
 }
 
-func NewAccessRepository(db *gorm.DB) *GormAccessRepository {
-	return &GormAccessRepository{DB: db}
+func NewUserRepository(db *gorm.DB) *GormUserRepository {
+	return &GormUserRepository{DB: db}
 }
 
-func (r *GormAccessRepository) FindActiveUserByUID(uid string) (*models.User, error) {
+func (r *GormUserRepository) FindActiveUserByUID(uid string) (*models.User, error) {
 	var user models.User
 	if err := r.DB.Where("uid = ? AND active = ?", uid, true).First(&user).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -32,8 +31,4 @@ func (r *GormAccessRepository) FindActiveUserByUID(uid string) (*models.User, er
 	}
 
 	return &user, nil
-}
-
-func (r *GormAccessRepository) CreateAccessLog(accessLog *models.AccessLog) error {
-	return r.DB.Create(accessLog).Error
 }
