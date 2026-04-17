@@ -18,10 +18,7 @@ func main() {
 		log.Fatalf("falha de configuração: %v", err)
 	}
 
-	db, err := database.Init(cfg.DBPath)
-	if err != nil {
-		log.Fatalf("falha ao inicializar banco: %v", err)
-	}
+	db := database.Init(cfg.DBPath)
 
 	userRepository := repositories.NewUserRepository(db)
 	accessLogRepository := repositories.NewAccessLogRepository(db)

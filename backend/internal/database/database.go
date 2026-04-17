@@ -1,20 +1,36 @@
 package database
 
 import (
-	"fmt"
+	"log"
+	"os"
+	"time"
 
 	"github.com/paulochiaradia/esp32-secure-access/internal/models"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
-func Init(dbPath string) (*gorm.DB, error) {
-	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
+func Init(dbPath string) *gorm.DB {
+	// Configura um logger customizado para o GORM
+	newLogger := logger.New(
+		log.New(os.Stdout, "\r\n", log.LstdFlags), // io writer
+		logger.Config{
+			SlowThreshold:             time.Second,
+			LogLevel:                  logger.Error,
+			IgnoreRecordNotFoundError: true,
+			Colorful:                  true,
+		},
+	)
+
+	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{
+		Logger: newLogger, // Aplica o novo logger
+	})
+
 	if err != nil {
-		return nil, fmt.Errorf("falha ao conectar ao banco (%s): %w", dbPath, err)
+		log.Fatalf("Falha ao conectar ao banco: %v", err)
 	}
-	if err := db.AutoMigrate(&models.User{}, &models.AccessLog{}, &models.UsedNonce{}); err != nil {
-		return nil, fmt.Errorf("falha ao migrar o banco (%s): %w", dbPath, err)
-	}
-	return db, nil
+
+	db.AutoMigrate(&models.User{}, &models.AccessLog{}, &models.UsedNonce{})
+	return db
 }
