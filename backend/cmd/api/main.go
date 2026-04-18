@@ -31,14 +31,27 @@ func main() {
 		time.Duration(cfg.AllowedClockSkewSeconds)*time.Second,
 		time.Duration(cfg.NonceTTLSeconds)*time.Second,
 	)
-	accessHandler := handlers.NewAccessHandler(accessService)
+	accessHandler := handlers.NewAccessHandler(accessService, db)
 	healthHandler := handlers.NewHealthHandler(db)
+
+	go func() {
+		for {
+			time.Sleep(10 * time.Minute)
+			if err := database.CleanOldPendingRegistrations(db); err != nil {
+				log.Printf("Erro na limpeza de pendências: %v", err)
+			} else {
+				log.Println("Limpeza de tags pendentes executada com sucesso.")
+			}
+		}
+	}()
 
 	r := gin.Default()
 	r.GET("/health", healthHandler.HandleHealthCheck)
 	v1 := r.Group("/v1")
 	{
 		v1.POST("/access", accessHandler.HandleAccessRequest)
+		v1.GET("/users/pending", accessHandler.ListPending)
+		v1.POST("/users/register", accessHandler.RegisterFromPending)
 	}
 
 	if err := r.Run(":" + cfg.Port); err != nil {
