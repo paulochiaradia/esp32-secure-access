@@ -31,6 +31,11 @@ func Init(dbPath string) *gorm.DB {
 		log.Fatalf("Falha ao conectar ao banco: %v", err)
 	}
 
-	db.AutoMigrate(&models.User{}, &models.AccessLog{}, &models.UsedNonce{})
+	db.AutoMigrate(&models.User{}, &models.AccessLog{}, &models.UsedNonce{}, &models.PendingRegistration{})
 	return db
+}
+
+func CleanOldPendingRegistrations(db *gorm.DB) error {
+	oneHourAgo := time.Now().Add(-1 * time.Hour)
+	return db.Where("last_seen < ?", oneHourAgo).Delete(&models.PendingRegistration{}).Error
 }
