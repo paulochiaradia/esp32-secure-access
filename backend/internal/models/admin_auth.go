@@ -6,6 +6,11 @@ type AdminLoginRequest struct {
 	Password string `json:"password" binding:"required,min=8,max=128"`
 }
 
+// AdminRefreshRequest recebe o refresh token atual para renovacao da sessao.
+type AdminRefreshRequest struct {
+	RefreshToken string `json:"refresh_token" binding:"required"`
+}
+
 // AdminUserInfo representa os dados publicos do administrador autenticado.
 type AdminUserInfo struct {
 	ID       uint   `json:"id"`

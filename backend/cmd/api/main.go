@@ -60,6 +60,7 @@ func main() {
 	{
 		v1.POST("/access", accessHandler.HandleAccessRequest)
 		v1.POST("/admin/auth/login", adminAuthHandler.Login)
+		v1.POST("/admin/auth/refresh", adminAuthHandler.Refresh)
 		v1.GET("/users/pending", accessHandler.ListPending)
 		v1.POST("/users/register", accessHandler.RegisterFromPending)
 	}

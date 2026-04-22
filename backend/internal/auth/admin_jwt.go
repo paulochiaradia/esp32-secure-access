@@ -56,6 +56,29 @@ func HashToken(token string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// ParseAndValidateAdminToken valida assinatura, issuer e tipo do token administrativo.
+func ParseAndValidateAdminToken(secret string, tokenString string, expectedTokenType string) (*AdminClaims, error) {
+	token, err := jwt.ParseWithClaims(tokenString, &AdminClaims{}, func(token *jwt.Token) (any, error) {
+		if token.Method != jwt.SigningMethodHS256 {
+			return nil, fmt.Errorf("algoritmo inesperado: %s", token.Method.Alg())
+		}
+		return []byte(secret), nil
+	}, jwt.WithIssuer(adminTokenIssuer))
+	if err != nil {
+		return nil, err
+	}
+
+	claims, ok := token.Claims.(*AdminClaims)
+	if !ok || !token.Valid {
+		return nil, fmt.Errorf("token administrativo invalido")
+	}
+	if claims.TokenType != expectedTokenType {
+		return nil, fmt.Errorf("tipo de token inesperado")
+	}
+
+	return claims, nil
+}
+
 func randomTokenID() (string, error) {
 	buf := make([]byte, 16)
 	if _, err := rand.Read(buf); err != nil {

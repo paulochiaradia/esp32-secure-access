@@ -39,3 +39,28 @@ func (h *AdminAuthHandler) Login(c *gin.Context) {
 
 	c.JSON(http.StatusOK, result)
 }
+
+func (h *AdminAuthHandler) Refresh(c *gin.Context) {
+	var req models.AdminRefreshRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": "Payload inválido"})
+		return
+	}
+
+	result, err := h.Service.Refresh(req.RefreshToken, c.ClientIP(), c.GetHeader("User-Agent"))
+	if err != nil {
+		switch {
+		case errors.Is(err, services.ErrInvalidRefreshToken):
+			c.JSON(http.StatusUnauthorized, gin.H{"status": "error", "message": "Refresh token inválido"})
+		case errors.Is(err, services.ErrRefreshSessionRevoked):
+			c.JSON(http.StatusUnauthorized, gin.H{"status": "error", "message": "Refresh token revogado"})
+		case errors.Is(err, services.ErrRefreshSessionExpired):
+			c.JSON(http.StatusUnauthorized, gin.H{"status": "error", "message": "Refresh token expirado"})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Erro interno"})
+		}
+		return
+	}
+
+	c.JSON(http.StatusOK, result)
+}
