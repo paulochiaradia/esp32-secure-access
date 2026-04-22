@@ -8,6 +8,7 @@ import (
 	"github.com/paulochiaradia/esp32-secure-access/internal/config"
 	"github.com/paulochiaradia/esp32-secure-access/internal/database"
 	"github.com/paulochiaradia/esp32-secure-access/internal/handlers"
+	"github.com/paulochiaradia/esp32-secure-access/internal/middleware"
 	"github.com/paulochiaradia/esp32-secure-access/internal/repositories"
 	"github.com/paulochiaradia/esp32-secure-access/internal/services"
 )
@@ -59,10 +60,19 @@ func main() {
 	v1 := r.Group("/v1")
 	{
 		v1.POST("/access", accessHandler.HandleAccessRequest)
-		v1.POST("/admin/auth/login", adminAuthHandler.Login)
-		v1.POST("/admin/auth/refresh", adminAuthHandler.Refresh)
-		v1.GET("/users/pending", accessHandler.ListPending)
-		v1.POST("/users/register", accessHandler.RegisterFromPending)
+
+		adminAuth := v1.Group("/admin/auth")
+		{
+			adminAuth.POST("/login", adminAuthHandler.Login)
+			adminAuth.POST("/refresh", adminAuthHandler.Refresh)
+		}
+
+		admin := v1.Group("/admin")
+		admin.Use(middleware.RequireAdminAuth(cfg.SecretKey))
+		{
+			admin.GET("/users/pending", middleware.RequireAdminRoles("admin", "viewer"), accessHandler.ListPending)
+			admin.POST("/users/register", middleware.RequireAdminRoles("admin"), accessHandler.RegisterFromPending)
+		}
 	}
 
 	if err := r.Run(":" + cfg.Port); err != nil {
