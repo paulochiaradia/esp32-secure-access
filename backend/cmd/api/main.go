@@ -21,6 +21,7 @@ func main() {
 	db := database.Init(cfg.DBPath)
 
 	userRepository := repositories.NewUserRepository(db)
+	adminUserRepository := repositories.NewAdminUserRepository(db)
 	accessLogRepository := repositories.NewAccessLogRepository(db)
 	nonceRepository := repositories.NewNonceRepository(db)
 	accessService := services.NewAccessService(
@@ -31,7 +32,15 @@ func main() {
 		time.Duration(cfg.AllowedClockSkewSeconds)*time.Second,
 		time.Duration(cfg.NonceTTLSeconds)*time.Second,
 	)
+	adminAuthService := services.NewAdminAuthService(
+		db,
+		adminUserRepository,
+		cfg.SecretKey,
+		15*time.Minute,
+		7*24*time.Hour,
+	)
 	accessHandler := handlers.NewAccessHandler(accessService, db)
+	adminAuthHandler := handlers.NewAdminAuthHandler(adminAuthService)
 	healthHandler := handlers.NewHealthHandler(db)
 
 	go func() {
@@ -50,6 +59,7 @@ func main() {
 	v1 := r.Group("/v1")
 	{
 		v1.POST("/access", accessHandler.HandleAccessRequest)
+		v1.POST("/admin/auth/login", adminAuthHandler.Login)
 		v1.GET("/users/pending", accessHandler.ListPending)
 		v1.POST("/users/register", accessHandler.RegisterFromPending)
 	}
