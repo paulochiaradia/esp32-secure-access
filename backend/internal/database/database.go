@@ -37,5 +37,5 @@ func Init(dbPath string) *gorm.DB {
 
 func CleanOldPendingRegistrations(db *gorm.DB) error {
 	oneHourAgo := time.Now().Add(-1 * time.Hour)
-	return db.Where("last_seen < ?", oneHourAgo).Delete(&models.PendingRegistration{}).Error
+	return db.Unscoped().Where("last_seen < ?", oneHourAgo).Delete(&models.PendingRegistration{}).Error
 }

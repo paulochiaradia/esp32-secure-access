@@ -53,6 +53,14 @@ func TestCleanOldPendingRegistrations_RemovesOnlyOlderThanOneHour(t *testing.T) 
 		t.Fatalf("registro antigo deveria ter sido removido, mas ainda existem %d", countOld)
 	}
 
+	var countOldUnscoped int64
+	if err := db.Unscoped().Model(&models.PendingRegistration{}).Where("uid = ?", "TAG-OLD").Count(&countOldUnscoped).Error; err != nil {
+		t.Fatalf("erro ao contar registro antigo em unscoped: %v", err)
+	}
+	if countOldUnscoped != 0 {
+		t.Fatalf("registro antigo deveria ter sido removido fisicamente, contagem unscoped %d", countOldUnscoped)
+	}
+
 	var countRecent int64
 	if err := db.Model(&models.PendingRegistration{}).Where("uid = ?", "TAG-RECENT").Count(&countRecent).Error; err != nil {
 		t.Fatalf("erro ao contar registro recente: %v", err)

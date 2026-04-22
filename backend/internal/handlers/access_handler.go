@@ -70,7 +70,7 @@ func (h *AccessHandler) HandleAccessRequest(c *gin.Context) {
 
 func (h *AccessHandler) upsertPendingRegistration(uid string) (attemptCount int, isNew bool, err error) {
 	var pending models.PendingRegistration
-	err = h.DB.Where("uid = ?", uid).First(&pending).Error
+	err = h.DB.Unscoped().Where("uid = ?", uid).First(&pending).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			err = h.DB.Create(&models.PendingRegistration{
@@ -80,6 +80,15 @@ func (h *AccessHandler) upsertPendingRegistration(uid string) (attemptCount int,
 			return 1, true, err
 		}
 		return 0, false, err
+	}
+
+	if pending.DeletedAt.Valid {
+		err = h.DB.Unscoped().Model(&pending).Updates(map[string]interface{}{
+			"deleted_at":    nil,
+			"attempt_count": 1,
+			"last_seen":     time.Now(),
+		}).Error
+		return 1, true, err
 	}
 
 	attemptCount = pending.AttemptCount + 1
