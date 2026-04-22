@@ -35,6 +35,9 @@ func newTestDB(t *testing.T) *gorm.DB {
 		&models.AccessLog{},
 		&models.UsedNonce{},
 		&models.PendingRegistration{},
+		&models.AdminUser{},
+		&models.AdminRefreshSession{},
+		&models.AdminAuditLog{},
 	)
 	if err != nil {
 		t.Fatalf("erro ao fazer automigrate no banco de teste: %v", err)

@@ -31,7 +31,15 @@ func Init(dbPath string) *gorm.DB {
 		log.Fatalf("Falha ao conectar ao banco: %v", err)
 	}
 
-	db.AutoMigrate(&models.User{}, &models.AccessLog{}, &models.UsedNonce{}, &models.PendingRegistration{})
+	db.AutoMigrate(
+		&models.User{},
+		&models.AccessLog{},
+		&models.UsedNonce{},
+		&models.PendingRegistration{},
+		&models.AdminUser{},
+		&models.AdminRefreshSession{},
+		&models.AdminAuditLog{},
+	)
 	return db
 }
 
