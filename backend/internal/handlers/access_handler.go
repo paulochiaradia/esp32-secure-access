@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/paulochiaradia/esp32-secure-access/internal/middleware"
 	"github.com/paulochiaradia/esp32-secure-access/internal/models"
 	"github.com/paulochiaradia/esp32-secure-access/internal/services"
 	"gorm.io/gorm"
@@ -113,8 +114,21 @@ func (h *AccessHandler) ListPending(c *gin.Context) {
 
 // POST /v1/users/register
 func (h *AccessHandler) RegisterFromPending(c *gin.Context) {
+	adminUserID := adminUserIDFromContext(c)
+	ip := c.ClientIP()
+	userAgent := c.GetHeader("User-Agent")
+
 	var req models.CreateUserRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
+		_ = h.DB.Create(&models.AdminAuditLog{
+			AdminUserID:  adminUserID,
+			Action:       "admin.users.register",
+			TargetType:   "pending_registration",
+			Status:       "failed",
+			IP:           ip,
+			UserAgent:    userAgent,
+			MetadataJSON: `{"reason":"invalid_payload"}`,
+		}).Error
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Dados inválidos"})
 		return
 	}
@@ -130,9 +144,43 @@ func (h *AccessHandler) RegisterFromPending(c *gin.Context) {
 	})
 
 	if err != nil {
+		_ = h.DB.Create(&models.AdminAuditLog{
+			AdminUserID:  adminUserID,
+			Action:       "admin.users.register",
+			TargetType:   "pending_registration",
+			TargetID:     req.UID,
+			Status:       "failed",
+			IP:           ip,
+			UserAgent:    userAgent,
+			MetadataJSON: `{"reason":"operation_failed"}`,
+		}).Error
 		c.JSON(http.StatusConflict, gin.H{"error": "Erro ao processar cadastro: " + err.Error()})
 		return
 	}
 
+	_ = h.DB.Create(&models.AdminAuditLog{
+		AdminUserID: adminUserID,
+		Action:      "admin.users.register",
+		TargetType:  "user",
+		TargetID:    req.UID,
+		Status:      "success",
+		IP:          ip,
+		UserAgent:   userAgent,
+	}).Error
+
 	c.JSON(http.StatusCreated, gin.H{"message": "Usuário " + req.Name + " ativado com sucesso!"})
+}
+
+func adminUserIDFromContext(c *gin.Context) *uint {
+	v, exists := c.Get(middleware.AdminUserIDContextKey)
+	if !exists {
+		return nil
+	}
+
+	id, ok := v.(uint)
+	if !ok {
+		return nil
+	}
+
+	return &id
 }

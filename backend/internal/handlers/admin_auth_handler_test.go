@@ -91,6 +91,11 @@ func TestAdminAuthLogin_SuccessReturnsTokensAndStoresRefreshSession(t *testing.T
 	if storedSession.UserAgent != "test-agent" {
 		t.Fatalf("user agent nao foi persistido corretamente")
 	}
+
+	var loginAudit models.AdminAuditLog
+	if err := db.Where("action = ? AND status = ?", "admin.auth.login", "success").First(&loginAudit).Error; err != nil {
+		t.Fatalf("auditoria de login com sucesso nao encontrada: %v", err)
+	}
 }
 
 func TestAdminAuthLogin_InvalidPasswordReturnsUnauthorized(t *testing.T) {
@@ -117,6 +122,11 @@ func TestAdminAuthLogin_InvalidPasswordReturnsUnauthorized(t *testing.T) {
 
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("status inesperado: esperado %d, obtido %d", http.StatusUnauthorized, w.Code)
+	}
+
+	var failAudit models.AdminAuditLog
+	if err := db.Where("action = ? AND status = ?", "admin.auth.login", "failed").First(&failAudit).Error; err != nil {
+		t.Fatalf("auditoria de login com falha nao encontrada: %v", err)
 	}
 }
 
@@ -187,12 +197,22 @@ func TestAdminAuthRefresh_RotatesSessionAndRevokesPreviousToken(t *testing.T) {
 		t.Fatalf("nova sessao nao deveria estar revogada")
 	}
 
+	var refreshSuccessAudit models.AdminAuditLog
+	if err := db.Where("action = ? AND status = ?", "admin.auth.refresh", "success").First(&refreshSuccessAudit).Error; err != nil {
+		t.Fatalf("auditoria de refresh com sucesso nao encontrada: %v", err)
+	}
+
 	reuseReq := httptest.NewRequest(http.MethodPost, "/v1/admin/auth/refresh", bytes.NewBuffer(refreshBody))
 	reuseReq.Header.Set("Content-Type", "application/json")
 	reuseRes := httptest.NewRecorder()
 	router.ServeHTTP(reuseRes, reuseReq)
 	if reuseRes.Code != http.StatusUnauthorized {
 		t.Fatalf("reuso do refresh antigo deveria retornar 401, obtido %d", reuseRes.Code)
+	}
+
+	var refreshFailedAudit models.AdminAuditLog
+	if err := db.Where("action = ? AND status = ?", "admin.auth.refresh", "failed").First(&refreshFailedAudit).Error; err != nil {
+		t.Fatalf("auditoria de refresh com falha nao encontrada: %v", err)
 	}
 }
 

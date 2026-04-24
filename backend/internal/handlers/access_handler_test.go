@@ -216,6 +216,11 @@ func TestRegisterFromPending_CreatesUserAndHardDeletesPending(t *testing.T) {
 	if pendingCount != 0 {
 		t.Fatalf("pendência deveria ter sido removida fisicamente, mas ainda existem %d registros", pendingCount)
 	}
+
+	var adminAudit models.AdminAuditLog
+	if err := db.Where("action = ? AND status = ? AND target_id = ?", "admin.users.register", "success", "TAG-003").First(&adminAudit).Error; err != nil {
+		t.Fatalf("auditoria de registro admin nao encontrada: %v", err)
+	}
 }
 
 func TestRegisterFromPending_InvalidPayloadReturnsBadRequest(t *testing.T) {
