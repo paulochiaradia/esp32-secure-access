@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"time"
 
@@ -40,6 +41,7 @@ func main() {
 		15*time.Minute,
 		7*24*time.Hour,
 	)
+	rateLimiter := middleware.NewFixedWindowRateLimiter()
 	accessHandler := handlers.NewAccessHandler(accessService, db)
 	adminAuthHandler := handlers.NewAdminAuthHandler(adminAuthService)
 	healthHandler := handlers.NewHealthHandler(db)
@@ -63,12 +65,18 @@ func main() {
 
 		adminAuth := v1.Group("/admin/auth")
 		{
-			adminAuth.POST("/login", adminAuthHandler.Login)
-			adminAuth.POST("/refresh", adminAuthHandler.Refresh)
+			adminAuth.POST("/login", rateLimiter.LimitByKey(5, time.Minute, func(c *gin.Context) string { return c.ClientIP() }), adminAuthHandler.Login)
+			adminAuth.POST("/refresh", rateLimiter.LimitByKey(20, time.Minute, func(c *gin.Context) string { return c.ClientIP() }), adminAuthHandler.Refresh)
 		}
 
 		admin := v1.Group("/admin")
 		admin.Use(middleware.RequireAdminAuth(cfg.SecretKey))
+		admin.Use(rateLimiter.LimitByKey(60, time.Minute, func(c *gin.Context) string {
+			if userID, ok := c.Get(middleware.AdminUserIDContextKey); ok {
+				return fmt.Sprintf("admin:%v", userID)
+			}
+			return "admin:" + c.ClientIP()
+		}))
 		{
 			admin.GET("/users/pending", middleware.RequireAdminRoles("admin", "viewer"), accessHandler.ListPending)
 			admin.POST("/users/register", middleware.RequireAdminRoles("admin"), accessHandler.RegisterFromPending)
