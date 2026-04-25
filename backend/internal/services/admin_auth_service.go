@@ -19,6 +19,10 @@ var ErrAdminInactive = errors.New("admin user inactive")
 var ErrInvalidRefreshToken = errors.New("invalid refresh token")
 var ErrRefreshSessionRevoked = errors.New("refresh session revoked")
 var ErrRefreshSessionExpired = errors.New("refresh session expired")
+var ErrBootstrapDisabled = errors.New("bootstrap disabled")
+var ErrAdminAlreadyExists = errors.New("admin already exists")
+var ErrAdminUserNotFound = errors.New("admin user not found")
+var ErrInvalidCurrentPassword = errors.New("invalid current password")
 
 type AdminAuthService struct {
 	DB              *gorm.DB
@@ -255,4 +259,170 @@ func (s *AdminAuthService) createAuditLog(db *gorm.DB, adminUserID *uint, action
 	}
 
 	return db.Create(&entry).Error
+}
+
+func (s *AdminAuthService) BootstrapFirstAdmin(username, password, role, bootstrapToken, expectedBootstrapToken, ip, userAgent string) (*models.AdminUserInfo, error) {
+	if expectedBootstrapToken == "" || bootstrapToken != expectedBootstrapToken {
+		_ = s.createAuditLog(s.DB, nil, "admin.auth.bootstrap", "failed", "admin_user", username, ip, userAgent, map[string]any{"reason": "invalid_bootstrap_token"})
+		return nil, ErrBootstrapDisabled
+	}
+
+	if role == "" {
+		role = "admin"
+	}
+
+	var userInfo *models.AdminUserInfo
+	err := s.DB.Transaction(func(tx *gorm.DB) error {
+		var existingCount int64
+		if err := tx.Model(&models.AdminUser{}).Count(&existingCount).Error; err != nil {
+			return err
+		}
+		if existingCount > 0 {
+			return ErrAdminAlreadyExists
+		}
+
+		hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+		if err != nil {
+			return err
+		}
+
+		admin := models.AdminUser{
+			Username:     username,
+			PasswordHash: string(hash),
+			Role:         role,
+			Active:       true,
+		}
+		if err := tx.Create(&admin).Error; err != nil {
+			return err
+		}
+
+		if err := s.createAuditLog(tx, &admin.ID, "admin.auth.bootstrap", "success", "admin_user", admin.Username, ip, userAgent, nil); err != nil {
+			return err
+		}
+
+		userInfo = &models.AdminUserInfo{ID: admin.ID, Username: admin.Username, Role: admin.Role}
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, ErrAdminAlreadyExists) {
+			_ = s.createAuditLog(s.DB, nil, "admin.auth.bootstrap", "failed", "admin_user", username, ip, userAgent, map[string]any{"reason": "admin_already_exists"})
+		}
+		return nil, err
+	}
+
+	return userInfo, nil
+}
+
+func (s *AdminAuthService) Logout(adminUserID uint, refreshToken, ip, userAgent string) error {
+	claims, err := auth.ParseAndValidateAdminToken(s.JWTSecret, refreshToken, "refresh")
+	if err != nil {
+		_ = s.createAuditLog(s.DB, &adminUserID, "admin.auth.logout", "failed", "refresh_session", "", ip, userAgent, map[string]any{"reason": "invalid_token"})
+		return ErrInvalidRefreshToken
+	}
+
+	if claims.Subject != fmt.Sprintf("%d", adminUserID) {
+		_ = s.createAuditLog(s.DB, &adminUserID, "admin.auth.logout", "failed", "refresh_session", claims.ID, ip, userAgent, map[string]any{"reason": "subject_mismatch"})
+		return ErrInvalidRefreshToken
+	}
+
+	now := s.now()
+	var session models.AdminRefreshSession
+	if err := s.DB.Where("token_hash = ? AND admin_user_id = ?", auth.HashToken(refreshToken), adminUserID).First(&session).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			_ = s.createAuditLog(s.DB, &adminUserID, "admin.auth.logout", "failed", "refresh_session", claims.ID, ip, userAgent, map[string]any{"reason": "session_not_found"})
+			return ErrInvalidRefreshToken
+		}
+		return err
+	}
+
+	if session.RevokedAt != nil {
+		_ = s.createAuditLog(s.DB, &adminUserID, "admin.auth.logout", "failed", "refresh_session", session.JTI, ip, userAgent, map[string]any{"reason": "session_already_revoked"})
+		return ErrRefreshSessionRevoked
+	}
+
+	if err := s.DB.Model(&session).Update("revoked_at", now).Error; err != nil {
+		return err
+	}
+
+	if err := s.createAuditLog(s.DB, &adminUserID, "admin.auth.logout", "success", "refresh_session", session.JTI, ip, userAgent, nil); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (s *AdminAuthService) RevokeAllSessions(requesterUserID, targetUserID uint, ip, userAgent string) (int64, error) {
+	var target models.AdminUser
+	if err := s.DB.Where("id = ?", targetUserID).First(&target).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return 0, ErrAdminUserNotFound
+		}
+		return 0, err
+	}
+
+	now := s.now()
+	result := s.DB.Model(&models.AdminRefreshSession{}).Where("admin_user_id = ? AND revoked_at IS NULL", targetUserID).Update("revoked_at", now)
+	if result.Error != nil {
+		return 0, result.Error
+	}
+
+	requesterIDCopy := requesterUserID
+	if err := s.createAuditLog(s.DB, &requesterIDCopy, "admin.auth.revoke_all_sessions", "success", "admin_user", fmt.Sprintf("%d", targetUserID), ip, userAgent, map[string]any{"revoked_count": result.RowsAffected}); err != nil {
+		return 0, err
+	}
+
+	return result.RowsAffected, nil
+}
+
+func (s *AdminAuthService) ChangePassword(adminUserID uint, currentPassword, newPassword, ip, userAgent string) (int64, error) {
+	var admin models.AdminUser
+	if err := s.DB.Where("id = ? AND active = ?", adminUserID, true).First(&admin).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return 0, ErrAdminUserNotFound
+		}
+		return 0, err
+	}
+
+	if err := bcrypt.CompareHashAndPassword([]byte(admin.PasswordHash), []byte(currentPassword)); err != nil {
+		_ = s.createAuditLog(s.DB, &adminUserID, "admin.auth.change_password", "failed", "admin_user", admin.Username, ip, userAgent, map[string]any{"reason": "invalid_current_password"})
+		return 0, ErrInvalidCurrentPassword
+	}
+
+	newHash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+	if err != nil {
+		return 0, err
+	}
+
+	var revokedCount int64
+	err = s.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&admin).Update("password_hash", string(newHash)).Error; err != nil {
+			return err
+		}
+
+		now := s.now()
+		result := tx.Model(&models.AdminRefreshSession{}).Where("admin_user_id = ? AND revoked_at IS NULL", adminUserID).Update("revoked_at", now)
+		if result.Error != nil {
+			return result.Error
+		}
+		revokedCount = result.RowsAffected
+
+		if err := s.createAuditLog(tx, &adminUserID, "admin.auth.change_password", "success", "admin_user", admin.Username, ip, userAgent, map[string]any{"revoked_count": revokedCount}); err != nil {
+			return err
+		}
+
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+
+	return revokedCount, nil
+}
+
+func (s *AdminAuthService) CleanupExpiredRefreshSessions() (int64, error) {
+	result := s.DB.Unscoped().Where("expires_at < ?", s.now()).Delete(&models.AdminRefreshSession{})
+	if result.Error != nil {
+		return 0, result.Error
+	}
+	return result.RowsAffected, nil
 }

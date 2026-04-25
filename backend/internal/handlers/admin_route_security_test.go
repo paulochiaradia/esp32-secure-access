@@ -40,7 +40,7 @@ func newProtectedAdminRouter(t *testing.T, db *gorm.DB) *gin.Engine {
 	)
 
 	accessHandler := NewAccessHandler(accessService, db)
-	adminAuthHandler := NewAdminAuthHandler(adminAuthService)
+	adminAuthHandler := NewAdminAuthHandler(adminAuthService, "bootstrap-token")
 	rateLimiter := middleware.NewFixedWindowRateLimiter()
 
 	r := gin.New()

@@ -17,7 +17,7 @@ func newDatabaseTestDB(t *testing.T) *gorm.DB {
 		t.Fatalf("erro ao abrir banco de teste: %v", err)
 	}
 
-	if err := db.AutoMigrate(&models.PendingRegistration{}); err != nil {
+	if err := db.AutoMigrate(&models.PendingRegistration{}, &models.AdminRefreshSession{}); err != nil {
 		t.Fatalf("erro ao fazer automigrate da tabela de pendências: %v", err)
 	}
 
@@ -75,5 +75,39 @@ func TestCleanOldPendingRegistrations_RemovesOnlyOlderThanOneHour(t *testing.T) 
 	}
 	if countBorder != 1 {
 		t.Fatalf("registro limítrofe deveria permanecer, contagem atual %d", countBorder)
+	}
+}
+
+func TestCleanExpiredAdminRefreshSessions_RemovesOnlyExpiredSessions(t *testing.T) {
+	db := newDatabaseTestDB(t)
+
+	expired := models.AdminRefreshSession{AdminUserID: 1, TokenHash: "expired-hash", JTI: "expired-jti", IssuedAt: time.Now().Add(-2 * time.Hour), ExpiresAt: time.Now().Add(-1 * time.Hour)}
+	active := models.AdminRefreshSession{AdminUserID: 1, TokenHash: "active-hash", JTI: "active-jti", IssuedAt: time.Now().Add(-30 * time.Minute), ExpiresAt: time.Now().Add(2 * time.Hour)}
+
+	if err := db.Create(&expired).Error; err != nil {
+		t.Fatalf("erro ao inserir sessao expirada: %v", err)
+	}
+	if err := db.Create(&active).Error; err != nil {
+		t.Fatalf("erro ao inserir sessao ativa: %v", err)
+	}
+
+	if err := CleanExpiredAdminRefreshSessions(db); err != nil {
+		t.Fatalf("erro ao limpar sessoes expiradas: %v", err)
+	}
+
+	var expiredCount int64
+	if err := db.Unscoped().Model(&models.AdminRefreshSession{}).Where("token_hash = ?", "expired-hash").Count(&expiredCount).Error; err != nil {
+		t.Fatalf("erro ao contar sessao expirada: %v", err)
+	}
+	if expiredCount != 0 {
+		t.Fatalf("sessao expirada deveria ser removida fisicamente")
+	}
+
+	var activeCount int64
+	if err := db.Model(&models.AdminRefreshSession{}).Where("token_hash = ?", "active-hash").Count(&activeCount).Error; err != nil {
+		t.Fatalf("erro ao contar sessao ativa: %v", err)
+	}
+	if activeCount != 1 {
+		t.Fatalf("sessao ativa deveria permanecer")
 	}
 }

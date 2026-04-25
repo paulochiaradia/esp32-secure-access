@@ -12,6 +12,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/paulochiaradia/esp32-secure-access/internal/auth"
+	"github.com/paulochiaradia/esp32-secure-access/internal/middleware"
 	"github.com/paulochiaradia/esp32-secure-access/internal/models"
 	"github.com/paulochiaradia/esp32-secure-access/internal/repositories"
 	"github.com/paulochiaradia/esp32-secure-access/internal/services"
@@ -40,7 +41,7 @@ func newAdminAuthTestHandler(t *testing.T) (*AdminAuthHandler, *gorm.DB) {
 
 	db := newAdminAuthTestDB(t)
 	service := services.NewAdminAuthService(db, repositories.NewAdminUserRepository(db), testSecret, 15*time.Minute, 7*24*time.Hour)
-	return NewAdminAuthHandler(service), db
+	return NewAdminAuthHandler(service, "bootstrap-token"), db
 }
 
 func TestAdminAuthLogin_SuccessReturnsTokensAndStoresRefreshSession(t *testing.T) {
@@ -231,5 +232,198 @@ func TestAdminAuthRefresh_InvalidTokenReturnsUnauthorized(t *testing.T) {
 
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("status inesperado: esperado %d, obtido %d", http.StatusUnauthorized, w.Code)
+	}
+}
+
+func TestAdminAuthBootstrap_CreatesFirstAdmin(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler, db := newAdminAuthTestHandler(t)
+
+	router := gin.New()
+	router.POST("/v1/admin/auth/bootstrap", handler.Bootstrap)
+
+	body, _ := json.Marshal(models.AdminBootstrapRequest{Username: "root-admin", Password: "super-secret-password", Role: "admin"})
+	req := httptest.NewRequest(http.MethodPost, "/v1/admin/auth/bootstrap", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Bootstrap-Token", "bootstrap-token")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status inesperado: esperado %d, obtido %d, body: %s", http.StatusCreated, w.Code, w.Body.String())
+	}
+
+	var admin models.AdminUser
+	if err := db.Where("username = ?", "root-admin").First(&admin).Error; err != nil {
+		t.Fatalf("admin bootstrap nao foi criado: %v", err)
+	}
+}
+
+func TestAdminAuthLogout_RevokesRefreshSession(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler, db := newAdminAuthTestHandler(t)
+
+	hash, err := bcrypt.GenerateFromPassword([]byte("admin-password"), bcrypt.DefaultCost)
+	if err != nil {
+		t.Fatalf("erro ao gerar hash da senha: %v", err)
+	}
+	if err := db.Create(&models.AdminUser{Username: "admin-logout", PasswordHash: string(hash), Role: "admin", Active: true}).Error; err != nil {
+		t.Fatalf("erro ao criar admin: %v", err)
+	}
+
+	router := gin.New()
+	router.POST("/v1/admin/auth/login", handler.Login)
+	router.POST("/v1/admin/auth/refresh", handler.Refresh)
+	protected := router.Group("/v1/admin/auth")
+	protected.Use(middleware.RequireAdminAuth(testSecret))
+	protected.POST("/logout", handler.Logout)
+
+	loginBody, _ := json.Marshal(models.AdminLoginRequest{Username: "admin-logout", Password: "admin-password"})
+	loginReq := httptest.NewRequest(http.MethodPost, "/v1/admin/auth/login", bytes.NewBuffer(loginBody))
+	loginReq.Header.Set("Content-Type", "application/json")
+	loginRes := httptest.NewRecorder()
+	router.ServeHTTP(loginRes, loginReq)
+	if loginRes.Code != http.StatusOK {
+		t.Fatalf("login falhou: %d %s", loginRes.Code, loginRes.Body.String())
+	}
+
+	var loginResponse models.AdminLoginResponse
+	if err := json.Unmarshal(loginRes.Body.Bytes(), &loginResponse); err != nil {
+		t.Fatalf("erro ao desserializar login: %v", err)
+	}
+
+	logoutBody, _ := json.Marshal(models.AdminLogoutRequest{RefreshToken: loginResponse.RefreshToken})
+	logoutReq := httptest.NewRequest(http.MethodPost, "/v1/admin/auth/logout", bytes.NewBuffer(logoutBody))
+	logoutReq.Header.Set("Content-Type", "application/json")
+	logoutReq.Header.Set("Authorization", "Bearer "+loginResponse.AccessToken)
+	logoutRes := httptest.NewRecorder()
+	router.ServeHTTP(logoutRes, logoutReq)
+
+	if logoutRes.Code != http.StatusNoContent {
+		t.Fatalf("logout deveria retornar 204, retornou %d", logoutRes.Code)
+	}
+
+	refreshBody, _ := json.Marshal(models.AdminRefreshRequest{RefreshToken: loginResponse.RefreshToken})
+	refreshReq := httptest.NewRequest(http.MethodPost, "/v1/admin/auth/refresh", bytes.NewBuffer(refreshBody))
+	refreshReq.Header.Set("Content-Type", "application/json")
+	refreshRes := httptest.NewRecorder()
+	router.ServeHTTP(refreshRes, refreshReq)
+	if refreshRes.Code != http.StatusUnauthorized {
+		t.Fatalf("refresh após logout deveria retornar 401, retornou %d", refreshRes.Code)
+	}
+}
+
+func TestAdminAuthChangePassword_UpdatesCredentialsAndRevokesSessions(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler, db := newAdminAuthTestHandler(t)
+
+	hash, err := bcrypt.GenerateFromPassword([]byte("admin-password"), bcrypt.DefaultCost)
+	if err != nil {
+		t.Fatalf("erro ao gerar hash da senha: %v", err)
+	}
+	if err := db.Create(&models.AdminUser{Username: "admin-change", PasswordHash: string(hash), Role: "admin", Active: true}).Error; err != nil {
+		t.Fatalf("erro ao criar admin: %v", err)
+	}
+
+	router := gin.New()
+	router.POST("/v1/admin/auth/login", handler.Login)
+	protected := router.Group("/v1/admin/auth")
+	protected.Use(middleware.RequireAdminAuth(testSecret))
+	protected.POST("/change-password", handler.ChangePassword)
+
+	loginBody, _ := json.Marshal(models.AdminLoginRequest{Username: "admin-change", Password: "admin-password"})
+	loginReq := httptest.NewRequest(http.MethodPost, "/v1/admin/auth/login", bytes.NewBuffer(loginBody))
+	loginReq.Header.Set("Content-Type", "application/json")
+	loginRes := httptest.NewRecorder()
+	router.ServeHTTP(loginRes, loginReq)
+	if loginRes.Code != http.StatusOK {
+		t.Fatalf("login inicial falhou: %d", loginRes.Code)
+	}
+
+	var loginResponse models.AdminLoginResponse
+	if err := json.Unmarshal(loginRes.Body.Bytes(), &loginResponse); err != nil {
+		t.Fatalf("erro ao desserializar login inicial: %v", err)
+	}
+
+	changeBody, _ := json.Marshal(models.AdminChangePasswordRequest{CurrentPassword: "admin-password", NewPassword: "admin-password-2"})
+	changeReq := httptest.NewRequest(http.MethodPost, "/v1/admin/auth/change-password", bytes.NewBuffer(changeBody))
+	changeReq.Header.Set("Content-Type", "application/json")
+	changeReq.Header.Set("Authorization", "Bearer "+loginResponse.AccessToken)
+	changeRes := httptest.NewRecorder()
+	router.ServeHTTP(changeRes, changeReq)
+
+	if changeRes.Code != http.StatusOK {
+		t.Fatalf("change-password deveria retornar 200, retornou %d", changeRes.Code)
+	}
+
+	oldLoginBody, _ := json.Marshal(models.AdminLoginRequest{Username: "admin-change", Password: "admin-password"})
+	oldLoginReq := httptest.NewRequest(http.MethodPost, "/v1/admin/auth/login", bytes.NewBuffer(oldLoginBody))
+	oldLoginReq.Header.Set("Content-Type", "application/json")
+	oldLoginRes := httptest.NewRecorder()
+	router.ServeHTTP(oldLoginRes, oldLoginReq)
+	if oldLoginRes.Code != http.StatusUnauthorized {
+		t.Fatalf("login com senha antiga deveria retornar 401, retornou %d", oldLoginRes.Code)
+	}
+
+	newLoginBody, _ := json.Marshal(models.AdminLoginRequest{Username: "admin-change", Password: "admin-password-2"})
+	newLoginReq := httptest.NewRequest(http.MethodPost, "/v1/admin/auth/login", bytes.NewBuffer(newLoginBody))
+	newLoginReq.Header.Set("Content-Type", "application/json")
+	newLoginRes := httptest.NewRecorder()
+	router.ServeHTTP(newLoginRes, newLoginReq)
+	if newLoginRes.Code != http.StatusOK {
+		t.Fatalf("login com senha nova deveria retornar 200, retornou %d", newLoginRes.Code)
+	}
+}
+
+func TestAdminAuthRevokeAllSessions_RevokesTargetUserSessions(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler, db := newAdminAuthTestHandler(t)
+
+	hash, err := bcrypt.GenerateFromPassword([]byte("admin-password"), bcrypt.DefaultCost)
+	if err != nil {
+		t.Fatalf("erro ao gerar hash da senha: %v", err)
+	}
+	if err := db.Create(&models.AdminUser{Username: "admin-revoke", PasswordHash: string(hash), Role: "admin", Active: true}).Error; err != nil {
+		t.Fatalf("erro ao criar admin: %v", err)
+	}
+
+	router := gin.New()
+	router.POST("/v1/admin/auth/login", handler.Login)
+	router.POST("/v1/admin/auth/refresh", handler.Refresh)
+	protected := router.Group("/v1/admin/auth")
+	protected.Use(middleware.RequireAdminAuth(testSecret))
+	protected.POST("/revoke-all-sessions", handler.RevokeAllSessions)
+
+	loginBody, _ := json.Marshal(models.AdminLoginRequest{Username: "admin-revoke", Password: "admin-password"})
+	loginReq := httptest.NewRequest(http.MethodPost, "/v1/admin/auth/login", bytes.NewBuffer(loginBody))
+	loginReq.Header.Set("Content-Type", "application/json")
+	loginRes := httptest.NewRecorder()
+	router.ServeHTTP(loginRes, loginReq)
+	if loginRes.Code != http.StatusOK {
+		t.Fatalf("login inicial falhou: %d", loginRes.Code)
+	}
+
+	var loginResponse models.AdminLoginResponse
+	if err := json.Unmarshal(loginRes.Body.Bytes(), &loginResponse); err != nil {
+		t.Fatalf("erro ao desserializar login inicial: %v", err)
+	}
+
+	revokeBody, _ := json.Marshal(models.AdminRevokeSessionsRequest{})
+	revokeReq := httptest.NewRequest(http.MethodPost, "/v1/admin/auth/revoke-all-sessions", bytes.NewBuffer(revokeBody))
+	revokeReq.Header.Set("Content-Type", "application/json")
+	revokeReq.Header.Set("Authorization", "Bearer "+loginResponse.AccessToken)
+	revokeRes := httptest.NewRecorder()
+	router.ServeHTTP(revokeRes, revokeReq)
+	if revokeRes.Code != http.StatusOK {
+		t.Fatalf("revoke-all-sessions deveria retornar 200, retornou %d", revokeRes.Code)
+	}
+
+	refreshBody, _ := json.Marshal(models.AdminRefreshRequest{RefreshToken: loginResponse.RefreshToken})
+	refreshReq := httptest.NewRequest(http.MethodPost, "/v1/admin/auth/refresh", bytes.NewBuffer(refreshBody))
+	refreshReq.Header.Set("Content-Type", "application/json")
+	refreshRes := httptest.NewRecorder()
+	router.ServeHTTP(refreshRes, refreshReq)
+	if refreshRes.Code != http.StatusUnauthorized {
+		t.Fatalf("refresh após revoke-all deveria retornar 401, retornou %d", refreshRes.Code)
 	}
 }

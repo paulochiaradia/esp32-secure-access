@@ -47,3 +47,8 @@ func CleanOldPendingRegistrations(db *gorm.DB) error {
 	oneHourAgo := time.Now().Add(-1 * time.Hour)
 	return db.Unscoped().Where("last_seen < ?", oneHourAgo).Delete(&models.PendingRegistration{}).Error
 }
+
+func CleanExpiredAdminRefreshSessions(db *gorm.DB) error {
+	now := time.Now()
+	return db.Unscoped().Where("expires_at < ?", now).Delete(&models.AdminRefreshSession{}).Error
+}

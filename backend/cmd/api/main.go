@@ -38,12 +38,12 @@ func main() {
 		db,
 		adminUserRepository,
 		cfg.SecretKey,
-		15*time.Minute,
-		7*24*time.Hour,
+		time.Duration(cfg.AdminAccessTokenTTLSeconds)*time.Second,
+		time.Duration(cfg.AdminRefreshTokenTTLSeconds)*time.Second,
 	)
 	rateLimiter := middleware.NewFixedWindowRateLimiter()
 	accessHandler := handlers.NewAccessHandler(accessService, db)
-	adminAuthHandler := handlers.NewAdminAuthHandler(adminAuthService)
+	adminAuthHandler := handlers.NewAdminAuthHandler(adminAuthService, cfg.AdminBootstrapToken)
 	healthHandler := handlers.NewHealthHandler(db)
 
 	go func() {
@@ -53,6 +53,10 @@ func main() {
 				log.Printf("Erro na limpeza de pendências: %v", err)
 			} else {
 				log.Println("Limpeza de tags pendentes executada com sucesso.")
+			}
+
+			if err := database.CleanExpiredAdminRefreshSessions(db); err != nil {
+				log.Printf("Erro na limpeza de sessões admin expiradas: %v", err)
 			}
 		}
 	}()
@@ -65,13 +69,28 @@ func main() {
 
 		adminAuth := v1.Group("/admin/auth")
 		{
-			adminAuth.POST("/login", rateLimiter.LimitByKey(5, time.Minute, func(c *gin.Context) string { return c.ClientIP() }), adminAuthHandler.Login)
-			adminAuth.POST("/refresh", rateLimiter.LimitByKey(20, time.Minute, func(c *gin.Context) string { return c.ClientIP() }), adminAuthHandler.Refresh)
+			adminAuth.POST("/bootstrap", rateLimiter.LimitByKey(cfg.AdminLoginRateLimitPerMinute, time.Minute, func(c *gin.Context) string { return c.ClientIP() }), adminAuthHandler.Bootstrap)
+			adminAuth.POST("/login", rateLimiter.LimitByKey(cfg.AdminLoginRateLimitPerMinute, time.Minute, func(c *gin.Context) string { return c.ClientIP() }), adminAuthHandler.Login)
+			adminAuth.POST("/refresh", rateLimiter.LimitByKey(cfg.AdminRefreshRateLimitPerMinute, time.Minute, func(c *gin.Context) string { return c.ClientIP() }), adminAuthHandler.Refresh)
+		}
+
+		adminAuthProtected := v1.Group("/admin/auth")
+		adminAuthProtected.Use(middleware.RequireAdminAuth(cfg.SecretKey))
+		adminAuthProtected.Use(rateLimiter.LimitByKey(cfg.AdminRoutesRateLimitPerMinute, time.Minute, func(c *gin.Context) string {
+			if userID, ok := c.Get(middleware.AdminUserIDContextKey); ok {
+				return fmt.Sprintf("admin:%v", userID)
+			}
+			return "admin:" + c.ClientIP()
+		}))
+		{
+			adminAuthProtected.POST("/logout", adminAuthHandler.Logout)
+			adminAuthProtected.POST("/change-password", adminAuthHandler.ChangePassword)
+			adminAuthProtected.POST("/revoke-all-sessions", middleware.RequireAdminRoles("admin"), adminAuthHandler.RevokeAllSessions)
 		}
 
 		admin := v1.Group("/admin")
 		admin.Use(middleware.RequireAdminAuth(cfg.SecretKey))
-		admin.Use(rateLimiter.LimitByKey(60, time.Minute, func(c *gin.Context) string {
+		admin.Use(rateLimiter.LimitByKey(cfg.AdminRoutesRateLimitPerMinute, time.Minute, func(c *gin.Context) string {
 			if userID, ok := c.Get(middleware.AdminUserIDContextKey); ok {
 				return fmt.Sprintf("admin:%v", userID)
 			}
