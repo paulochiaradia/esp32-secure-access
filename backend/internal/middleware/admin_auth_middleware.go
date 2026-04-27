@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/paulochiaradia/esp32-secure-access/internal/apiresponse"
 	"github.com/paulochiaradia/esp32-secure-access/internal/auth"
 )
 
@@ -20,20 +21,23 @@ func RequireAdminAuth(secret string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authHeader := strings.TrimSpace(c.GetHeader("Authorization"))
 		if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"status": "error", "message": "Token de acesso ausente"})
+			apiresponse.WriteError(c, http.StatusUnauthorized, "AUTH_TOKEN_MISSING", "Token de acesso ausente")
+			c.Abort()
 			return
 		}
 
 		tokenString := strings.TrimSpace(strings.TrimPrefix(authHeader, "Bearer "))
 		claims, err := auth.ParseAndValidateAdminToken(secret, tokenString, "access")
 		if err != nil {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"status": "error", "message": "Token de acesso inválido"})
+			apiresponse.WriteError(c, http.StatusUnauthorized, "AUTH_TOKEN_INVALID", "Token de acesso inválido")
+			c.Abort()
 			return
 		}
 
 		adminUserID, err := strconv.ParseUint(claims.Subject, 10, 64)
 		if err != nil {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"status": "error", "message": "Token de acesso inválido"})
+			apiresponse.WriteError(c, http.StatusUnauthorized, "AUTH_TOKEN_INVALID", "Token de acesso inválido")
+			c.Abort()
 			return
 		}
 
@@ -54,18 +58,21 @@ func RequireAdminRoles(roles ...string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		roleValue, exists := c.Get(AdminRoleContextKey)
 		if !exists {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"status": "error", "message": "Token de acesso ausente"})
+			apiresponse.WriteError(c, http.StatusUnauthorized, "AUTH_TOKEN_MISSING", "Token de acesso ausente")
+			c.Abort()
 			return
 		}
 
 		role, ok := roleValue.(string)
 		if !ok {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"status": "error", "message": "Token de acesso inválido"})
+			apiresponse.WriteError(c, http.StatusUnauthorized, "AUTH_TOKEN_INVALID", "Token de acesso inválido")
+			c.Abort()
 			return
 		}
 
 		if _, isAllowed := allowed[role]; !isAllowed {
-			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"status": "error", "message": "Permissão insuficiente"})
+			apiresponse.WriteError(c, http.StatusForbidden, "AUTH_FORBIDDEN", "Permissão insuficiente")
+			c.Abort()
 			return
 		}
 

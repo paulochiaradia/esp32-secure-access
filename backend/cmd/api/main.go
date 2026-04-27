@@ -99,8 +99,11 @@ func main() {
 		{
 			admin.GET("/users/pending", middleware.RequireAdminRoles("admin", "viewer"), accessHandler.ListPending)
 			admin.POST("/users/register", middleware.RequireAdminRoles("admin"), accessHandler.RegisterFromPending)
+			admin.GET("/audit", middleware.RequireAdminRoles("admin"), accessHandler.ListAuditLogs)
 		}
 	}
+
+	r.GET("/health/security", healthHandler.HandleSecurityHealthCheck)
 
 	if err := r.Run(":" + cfg.Port); err != nil {
 		log.Fatalf("falha ao subir servidor: %v", err)

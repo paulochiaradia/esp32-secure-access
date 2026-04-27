@@ -15,10 +15,21 @@ type AccessResponse struct {
 
 type ErrorResponse struct {
 	Status  string `json:"status"`
+	Code    string `json:"code,omitempty"`
 	Message string `json:"message"`
+	TraceID string `json:"trace_id,omitempty"`
 }
 
 type HealthResponse struct {
 	Status   string `json:"status"`
 	Database string `json:"database"`
+}
+
+type SecurityHealthResponse struct {
+	Status                  string `json:"status"`
+	Database                string `json:"database"`
+	ActiveAdminSessions     int64  `json:"active_admin_sessions"`
+	RecentFailedAdminAuth   int64  `json:"recent_failed_admin_auth"`
+	ExpiredRefreshSessions  int64  `json:"expired_refresh_sessions"`
+	RecentFailedLoginWindow string `json:"recent_failed_login_window"`
 }

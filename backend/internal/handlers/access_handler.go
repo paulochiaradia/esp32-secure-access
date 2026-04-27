@@ -4,9 +4,11 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/paulochiaradia/esp32-secure-access/internal/apiresponse"
 	"github.com/paulochiaradia/esp32-secure-access/internal/middleware"
 	"github.com/paulochiaradia/esp32-secure-access/internal/models"
 	"github.com/paulochiaradia/esp32-secure-access/internal/services"
@@ -27,7 +29,7 @@ func (h *AccessHandler) HandleAccessRequest(c *gin.Context) {
 	var req models.AccessRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		log.Printf("Erro de parse: %v", err)
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{Status: "error", Message: "Payload inválido"})
+		apiresponse.WriteError(c, http.StatusBadRequest, "VALIDATION_ERROR", "Payload inválido")
 		return
 	}
 
@@ -57,7 +59,7 @@ func (h *AccessHandler) HandleAccessRequest(c *gin.Context) {
 
 			c.JSON(http.StatusForbidden, gin.H{"status": "denied", "message": "Acesso não autorizado. Tag registrada para análise."})
 		default:
-			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Status: "error", Message: "Erro interno"})
+			apiresponse.WriteError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "Erro interno")
 		}
 		return
 	}
@@ -105,7 +107,7 @@ func (h *AccessHandler) upsertPendingRegistration(uid string) (attemptCount int,
 func (h *AccessHandler) ListPending(c *gin.Context) {
 	var pending []models.PendingRegistration
 	if err := h.DB.Order("last_seen desc").Find(&pending).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Falha ao listar pendências"})
+		apiresponse.WriteError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "Falha ao listar pendências")
 		return
 	}
 
@@ -129,7 +131,7 @@ func (h *AccessHandler) RegisterFromPending(c *gin.Context) {
 			UserAgent:    userAgent,
 			MetadataJSON: `{"reason":"invalid_payload"}`,
 		}).Error
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Dados inválidos"})
+		apiresponse.WriteError(c, http.StatusBadRequest, "VALIDATION_ERROR", "Dados inválidos")
 		return
 	}
 
@@ -154,7 +156,7 @@ func (h *AccessHandler) RegisterFromPending(c *gin.Context) {
 			UserAgent:    userAgent,
 			MetadataJSON: `{"reason":"operation_failed"}`,
 		}).Error
-		c.JSON(http.StatusConflict, gin.H{"error": "Erro ao processar cadastro: " + err.Error()})
+		apiresponse.WriteError(c, http.StatusConflict, "CONFLICT", "Erro ao processar cadastro: "+err.Error())
 		return
 	}
 
@@ -169,6 +171,71 @@ func (h *AccessHandler) RegisterFromPending(c *gin.Context) {
 	}).Error
 
 	c.JSON(http.StatusCreated, gin.H{"message": "Usuário " + req.Name + " ativado com sucesso!"})
+}
+
+func (h *AccessHandler) ListAuditLogs(c *gin.Context) {
+	page := parseIntQuery(c, "page", 1)
+	limit := parseIntQuery(c, "limit", 20)
+	if limit > 100 {
+		limit = 100
+	}
+	if page < 1 {
+		page = 1
+	}
+
+	action := c.Query("action")
+	status := c.Query("status")
+	from := c.Query("from")
+	to := c.Query("to")
+
+	query := h.DB.Model(&models.AdminAuditLog{})
+	if action != "" {
+		query = query.Where("action = ?", action)
+	}
+	if status != "" {
+		query = query.Where("status = ?", status)
+	}
+	if from != "" {
+		query = query.Where("created_at >= ?", from)
+	}
+	if to != "" {
+		query = query.Where("created_at <= ?", to)
+	}
+
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		apiresponse.WriteError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "Falha ao listar auditoria")
+		return
+	}
+
+	var logs []models.AdminAuditLog
+	offset := (page - 1) * limit
+	if err := query.Order("created_at desc").Limit(limit).Offset(offset).Find(&logs).Error; err != nil {
+		apiresponse.WriteError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "Falha ao listar auditoria")
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"status": "ok",
+		"data":   logs,
+		"pagination": gin.H{
+			"page":  page,
+			"limit": limit,
+			"total": total,
+		},
+	})
+}
+
+func parseIntQuery(c *gin.Context, key string, defaultValue int) int {
+	value := c.Query(key)
+	if value == "" {
+		return defaultValue
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return defaultValue
+	}
+	return parsed
 }
 
 func adminUserIDFromContext(c *gin.Context) *uint {

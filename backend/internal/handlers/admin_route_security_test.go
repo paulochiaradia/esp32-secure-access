@@ -63,6 +63,7 @@ func newProtectedAdminRouter(t *testing.T, db *gorm.DB) *gin.Engine {
 		{
 			admin.GET("/users/pending", middleware.RequireAdminRoles("admin", "viewer"), accessHandler.ListPending)
 			admin.POST("/users/register", middleware.RequireAdminRoles("admin"), accessHandler.RegisterFromPending)
+			admin.GET("/audit", middleware.RequireAdminRoles("admin"), accessHandler.ListAuditLogs)
 		}
 	}
 
@@ -91,6 +92,14 @@ func TestAdminProtectedRoutes_WithoutTokenReturnsUnauthorized(t *testing.T) {
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("status inesperado: esperado %d, obtido %d", http.StatusUnauthorized, w.Code)
 	}
+
+	var response models.ErrorResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("erro ao desserializar resposta: %v", err)
+	}
+	if response.Code != "AUTH_TOKEN_MISSING" || response.TraceID == "" {
+		t.Fatalf("resposta de erro nao padronizada: %+v", response)
+	}
 }
 
 func TestAdminProtectedRoutes_ViewerCannotRegister(t *testing.T) {
@@ -108,6 +117,14 @@ func TestAdminProtectedRoutes_ViewerCannotRegister(t *testing.T) {
 
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("status inesperado: esperado %d, obtido %d", http.StatusForbidden, w.Code)
+	}
+
+	var response models.ErrorResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("erro ao desserializar resposta: %v", err)
+	}
+	if response.Code != "AUTH_FORBIDDEN" || response.TraceID == "" {
+		t.Fatalf("resposta de erro nao padronizada: %+v", response)
 	}
 }
 
@@ -163,5 +180,92 @@ func TestAdminAuthLogin_RateLimitByIP(t *testing.T) {
 
 	if w.Code != http.StatusTooManyRequests {
 		t.Fatalf("sexta tentativa deveria retornar 429, retornou %d", w.Code)
+	}
+}
+
+func TestAdminProtectedRoutes_TamperedAndExpiredTokensRejected(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := newTestDB(t)
+	router := newProtectedAdminRouter(t, db)
+
+	tampered := buildAccessTokenForRole(t, "10", "viewer-user", "viewer")
+	tampered = tampered[:len(tampered)-1] + "x"
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/users/pending", nil)
+	req.Header.Set("Authorization", "Bearer "+tampered)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("token adulterado deveria retornar 401, retornou %d", w.Code)
+	}
+
+	expired, _, _, err := auth.GenerateAdminToken(testSecret, "11", "expired-user", "admin", "access", -time.Minute, time.Now())
+	if err != nil {
+		t.Fatalf("erro ao gerar token expirado: %v", err)
+	}
+	expiredReq := httptest.NewRequest(http.MethodGet, "/v1/admin/users/pending", nil)
+	expiredReq.Header.Set("Authorization", "Bearer "+expired)
+	expiredRes := httptest.NewRecorder()
+	router.ServeHTTP(expiredRes, expiredReq)
+	if expiredRes.Code != http.StatusUnauthorized {
+		t.Fatalf("token expirado deveria retornar 401, retornou %d", expiredRes.Code)
+	}
+}
+
+func TestAdminProtectedRoutes_InvalidRoleIsForbidden(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := newTestDB(t)
+	router := newProtectedAdminRouter(t, db)
+
+	token := buildAccessTokenForRole(t, "12", "guest-user", "guest")
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/users/pending", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("role invalida deveria retornar 403, retornou %d", w.Code)
+	}
+}
+
+func TestAdminAuditLogs_FilterAndPaginate(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := newTestDB(t)
+	router := newProtectedAdminRouter(t, db)
+
+	base := time.Now()
+	logs := []models.AdminAuditLog{
+		{Action: "admin.auth.login", Status: "success", CreatedAt: base.Add(-2 * time.Hour)},
+		{Action: "admin.auth.login", Status: "failed", CreatedAt: base.Add(-90 * time.Minute)},
+		{Action: "admin.users.register", Status: "success", CreatedAt: base.Add(-30 * time.Minute)},
+	}
+	for i := range logs {
+		if err := db.Create(&logs[i]).Error; err != nil {
+			t.Fatalf("erro ao criar log %d: %v", i, err)
+		}
+	}
+
+	token := buildAccessTokenForRole(t, "1", "admin-user", "admin")
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/audit?action=admin.auth.login&status=success&page=1&limit=1", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("audit endpoint deveria retornar 200, retornou %d, body: %s", w.Code, w.Body.String())
+	}
+
+	var response struct {
+		Status     string                 `json:"status"`
+		Data       []models.AdminAuditLog `json:"data"`
+		Pagination map[string]interface{} `json:"pagination"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("erro ao desserializar auditoria: %v", err)
+	}
+	if len(response.Data) != 1 {
+		t.Fatalf("filtro/paginacao deveria retornar 1 item, retornou %d", len(response.Data))
+	}
+	if response.Data[0].Action != "admin.auth.login" || response.Data[0].Status != "success" {
+		t.Fatalf("resultado filtrado incorreto: %+v", response.Data[0])
 	}
 }

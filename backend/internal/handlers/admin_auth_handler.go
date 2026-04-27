@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"github.com/paulochiaradia/esp32-secure-access/internal/apiresponse"
 	"github.com/paulochiaradia/esp32-secure-access/internal/middleware"
 	"github.com/paulochiaradia/esp32-secure-access/internal/models"
 	"github.com/paulochiaradia/esp32-secure-access/internal/services"
@@ -22,7 +23,7 @@ func NewAdminAuthHandler(service *services.AdminAuthService, bootstrapToken stri
 func (h *AdminAuthHandler) Bootstrap(c *gin.Context) {
 	var req models.AdminBootstrapRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": "Payload inválido"})
+		apiresponse.WriteError(c, http.StatusBadRequest, "VALIDATION_ERROR", "Payload inválido")
 		return
 	}
 
@@ -31,11 +32,11 @@ func (h *AdminAuthHandler) Bootstrap(c *gin.Context) {
 	if err != nil {
 		switch {
 		case errors.Is(err, services.ErrBootstrapDisabled):
-			c.JSON(http.StatusForbidden, gin.H{"status": "error", "message": "Bootstrap desabilitado"})
+			apiresponse.WriteError(c, http.StatusForbidden, "AUTH_FORBIDDEN", "Bootstrap desabilitado")
 		case errors.Is(err, services.ErrAdminAlreadyExists):
-			c.JSON(http.StatusConflict, gin.H{"status": "error", "message": "Administrador já existente"})
+			apiresponse.WriteError(c, http.StatusConflict, "CONFLICT", "Administrador já existente")
 		default:
-			c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Erro interno"})
+			apiresponse.WriteError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "Erro interno")
 		}
 		return
 	}
@@ -46,7 +47,7 @@ func (h *AdminAuthHandler) Bootstrap(c *gin.Context) {
 func (h *AdminAuthHandler) Login(c *gin.Context) {
 	var req models.AdminLoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": "Payload inválido"})
+		apiresponse.WriteError(c, http.StatusBadRequest, "VALIDATION_ERROR", "Payload inválido")
 		return
 	}
 
@@ -54,11 +55,11 @@ func (h *AdminAuthHandler) Login(c *gin.Context) {
 	if err != nil {
 		switch {
 		case errors.Is(err, services.ErrInvalidAdminCredentials):
-			c.JSON(http.StatusUnauthorized, gin.H{"status": "error", "message": "Credenciais inválidas"})
+			apiresponse.WriteError(c, http.StatusUnauthorized, "AUTH_INVALID_CREDENTIALS", "Credenciais inválidas")
 		case errors.Is(err, services.ErrAdminInactive):
-			c.JSON(http.StatusForbidden, gin.H{"status": "error", "message": "Usuário admin inativo"})
+			apiresponse.WriteError(c, http.StatusForbidden, "AUTH_FORBIDDEN", "Usuário admin inativo")
 		default:
-			c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Erro interno"})
+			apiresponse.WriteError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "Erro interno")
 		}
 		return
 	}
@@ -69,7 +70,7 @@ func (h *AdminAuthHandler) Login(c *gin.Context) {
 func (h *AdminAuthHandler) Refresh(c *gin.Context) {
 	var req models.AdminRefreshRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": "Payload inválido"})
+		apiresponse.WriteError(c, http.StatusBadRequest, "VALIDATION_ERROR", "Payload inválido")
 		return
 	}
 
@@ -77,13 +78,13 @@ func (h *AdminAuthHandler) Refresh(c *gin.Context) {
 	if err != nil {
 		switch {
 		case errors.Is(err, services.ErrInvalidRefreshToken):
-			c.JSON(http.StatusUnauthorized, gin.H{"status": "error", "message": "Refresh token inválido"})
+			apiresponse.WriteError(c, http.StatusUnauthorized, "AUTH_TOKEN_INVALID", "Refresh token inválido")
 		case errors.Is(err, services.ErrRefreshSessionRevoked):
-			c.JSON(http.StatusUnauthorized, gin.H{"status": "error", "message": "Refresh token revogado"})
+			apiresponse.WriteError(c, http.StatusUnauthorized, "AUTH_REFRESH_REVOKED", "Refresh token revogado")
 		case errors.Is(err, services.ErrRefreshSessionExpired):
-			c.JSON(http.StatusUnauthorized, gin.H{"status": "error", "message": "Refresh token expirado"})
+			apiresponse.WriteError(c, http.StatusUnauthorized, "AUTH_TOKEN_EXPIRED", "Refresh token expirado")
 		default:
-			c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Erro interno"})
+			apiresponse.WriteError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "Erro interno")
 		}
 		return
 	}
@@ -94,13 +95,13 @@ func (h *AdminAuthHandler) Refresh(c *gin.Context) {
 func (h *AdminAuthHandler) Logout(c *gin.Context) {
 	adminUserID, ok := adminUserIDFromAuthContext(c)
 	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"status": "error", "message": "Token de acesso inválido"})
+		apiresponse.WriteError(c, http.StatusUnauthorized, "AUTH_TOKEN_INVALID", "Token de acesso inválido")
 		return
 	}
 
 	var req models.AdminLogoutRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": "Payload inválido"})
+		apiresponse.WriteError(c, http.StatusBadRequest, "VALIDATION_ERROR", "Payload inválido")
 		return
 	}
 
@@ -108,9 +109,9 @@ func (h *AdminAuthHandler) Logout(c *gin.Context) {
 	if err != nil {
 		switch {
 		case errors.Is(err, services.ErrInvalidRefreshToken), errors.Is(err, services.ErrRefreshSessionRevoked):
-			c.JSON(http.StatusUnauthorized, gin.H{"status": "error", "message": "Refresh token inválido"})
+			apiresponse.WriteError(c, http.StatusUnauthorized, "AUTH_TOKEN_INVALID", "Refresh token inválido")
 		default:
-			c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Erro interno"})
+			apiresponse.WriteError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "Erro interno")
 		}
 		return
 	}
@@ -121,13 +122,13 @@ func (h *AdminAuthHandler) Logout(c *gin.Context) {
 func (h *AdminAuthHandler) ChangePassword(c *gin.Context) {
 	adminUserID, ok := adminUserIDFromAuthContext(c)
 	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"status": "error", "message": "Token de acesso inválido"})
+		apiresponse.WriteError(c, http.StatusUnauthorized, "AUTH_TOKEN_INVALID", "Token de acesso inválido")
 		return
 	}
 
 	var req models.AdminChangePasswordRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": "Payload inválido"})
+		apiresponse.WriteError(c, http.StatusBadRequest, "VALIDATION_ERROR", "Payload inválido")
 		return
 	}
 
@@ -135,11 +136,11 @@ func (h *AdminAuthHandler) ChangePassword(c *gin.Context) {
 	if err != nil {
 		switch {
 		case errors.Is(err, services.ErrInvalidCurrentPassword):
-			c.JSON(http.StatusUnauthorized, gin.H{"status": "error", "message": "Senha atual inválida"})
+			apiresponse.WriteError(c, http.StatusUnauthorized, "AUTH_INVALID_CREDENTIALS", "Senha atual inválida")
 		case errors.Is(err, services.ErrAdminUserNotFound):
-			c.JSON(http.StatusNotFound, gin.H{"status": "error", "message": "Administrador não encontrado"})
+			apiresponse.WriteError(c, http.StatusNotFound, "NOT_FOUND", "Administrador não encontrado")
 		default:
-			c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Erro interno"})
+			apiresponse.WriteError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "Erro interno")
 		}
 		return
 	}
@@ -150,13 +151,13 @@ func (h *AdminAuthHandler) ChangePassword(c *gin.Context) {
 func (h *AdminAuthHandler) RevokeAllSessions(c *gin.Context) {
 	requesterID, ok := adminUserIDFromAuthContext(c)
 	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"status": "error", "message": "Token de acesso inválido"})
+		apiresponse.WriteError(c, http.StatusUnauthorized, "AUTH_TOKEN_INVALID", "Token de acesso inválido")
 		return
 	}
 
 	var req models.AdminRevokeSessionsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": "Payload inválido"})
+		apiresponse.WriteError(c, http.StatusBadRequest, "VALIDATION_ERROR", "Payload inválido")
 		return
 	}
 
@@ -169,9 +170,9 @@ func (h *AdminAuthHandler) RevokeAllSessions(c *gin.Context) {
 	if err != nil {
 		switch {
 		case errors.Is(err, services.ErrAdminUserNotFound):
-			c.JSON(http.StatusNotFound, gin.H{"status": "error", "message": "Administrador não encontrado"})
+			apiresponse.WriteError(c, http.StatusNotFound, "NOT_FOUND", "Administrador não encontrado")
 		default:
-			c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Erro interno"})
+			apiresponse.WriteError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "Erro interno")
 		}
 		return
 	}
